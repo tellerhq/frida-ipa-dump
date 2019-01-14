@@ -11279,6 +11279,9 @@ rpc.exports = {
   root: function root() {
     return ObjC.classes.NSBundle.mainBundle().bundlePath().toString();
   },
+  data: function data() {
+    return ObjC.classes.NSProcessInfo.processInfo().environment().objectForKey_('HOME').toString();
+  },
   groups: function groups() {
     var createFromSelf = new NativeFunction(Module.findExportByName('Security', 'SecTaskCreateFromSelf'), 'pointer', ['pointer']);
     var task = createFromSelf(NULL);

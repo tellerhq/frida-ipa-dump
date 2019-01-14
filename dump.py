@@ -153,7 +153,10 @@ class IPADump(object):
         if len(self.plugins):
             self.dump_with_plugins()
         else:
-            script.exports.dump(self.opt)
+            root = self.script.exports.root()
+            container = self.script.exports.data()+"/tmp"
+            decrypted = self.script.exports.decrypt(root, container)
+            self.script.exports.archive(root, container, decrypted, self.opt)
 
         session.detach()
 
