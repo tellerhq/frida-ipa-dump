@@ -35,6 +35,7 @@ def find_app(app_name_or_id, device_id, device_ip):
     if dev.type not in ('tether', 'remote', 'usb'):
         fatal('unable to find device')
 
+    print(list(dev.enumerate_processes()))
     try:
         app = next(app for app in dev.enumerate_applications() if
                    app_name_or_id == app.identifier or
@@ -69,9 +70,9 @@ class Task(object):
 
 class IPADump(object):
 
-    def __init__(self, device, app, output=None, verbose=False, keep_watch=False):
+    def __init__(self, device, pid, output=None, verbose=False, keep_watch=False):
         self.device = device
-        self.app = app
+        self.pid = pid
         self.session = None
         self.cwd = None
         self.tasks = {}
@@ -99,6 +100,7 @@ class IPADump(object):
         del self.tasks[session]
 
     def on_message(self, msg, data):
+        print(".")
         if msg.get('type') != 'send':
             print('unknown message:', msg)
             return
@@ -129,20 +131,10 @@ class IPADump(object):
             print('[%s]' % level, text)
 
         on_console('info', 'attaching to target')
-        pid = self.app.pid
-        spawn = not bool(pid)
-        front = self.device.get_frontmost_application()
-        if pid and front and front.pid != pid:
-            self.device.kill(pid)
-            spawn = True
-
-        if spawn:
-            pid = self.device.spawn(self.app.identifier)
-            session = self.device.attach(pid)
-            self.device.resume(pid)
-        else:
-            session = self.device.attach(pid)
-
+        pid = self.pid
+        print("attaching...")
+        session = self.device.attach(pid)
+        print("attached")
         script = session.create_script(self.agent_source)
         script.set_log_handler(on_console)
         script.on('message', self.on_message)
@@ -150,64 +142,13 @@ class IPADump(object):
 
         self.plugins = script.exports.plugins()
         self.script = script
-        if len(self.plugins):
-            self.dump_with_plugins()
-        else:
-            root = self.script.exports.root()
-            container = self.script.exports.data()+"/tmp"
-            decrypted = self.script.exports.decrypt(root, container)
-            self.script.exports.archive(root, container, decrypted, self.opt)
-
-        session.detach()
-
-    def dump_with_plugins(self):
-        # handle plugins
-        try:
-            pkd = self.device.attach('pkd')
-        except frida.ProcessNotFoundError:
-            pid = self.device.spawn(['/bin/launchctl', 'start', 'com.apple.pluginkit.pkd'])
-            self.device.resume(pid)
-            # retry
-            pkd = self.device.attach('pkd')
-        pkd_script = pkd.create_script(self.agent_source)
-        pkd_script.load()
-        pkd_script.exports.skip_pkd_validation_for(self.app.pid)
-
-        Plugin = namedtuple('Plugin', ['id', 'session', 'pid', 'script'])
-        spawned = set()
-        all_groups = []
-        for identifier in self.plugins:
-            pid = self.script.exports.launch(identifier)
-            print('plugin %s, pid=%d' % (identifier, pid))
-            session = self.device.attach(pid)
-            script = session.create_script(self.agent_source)
-            script.load()
-
-            plugin = Plugin(id=identifier, session=session, pid=pid, script=script)
-            spawned.add(plugin)
-            all_groups.append(set(script.exports.groups()))
-
-        pkd.detach()
-        group = set.intersection(*all_groups).pop()
-        if not group:
-            raise RuntimeError('''App includes extension, but no valid '''
-                               '''app group found. Please file a bug to Github''')
-
         root = self.script.exports.root()
-        container = self.script.exports.path_for_group(group)
-        if self.verbose:
-            print('group:', group)
-            print('container:', container)
-            print('root:', root)
-        self.opt['dest'] = container
-
+        container = self.script.exports.data()+"/tmp"
         decrypted = self.script.exports.decrypt(root, container)
-        for plugin in spawned:
-            decrypted += plugin.script.exports.decrypt(root, container)
-            plugin.session.detach()
-            self.device.kill(plugin.pid)
-
         self.script.exports.archive(root, container, decrypted, self.opt)
+
+        print("detach")
+        session.detach()
 
     def load_agent(self):
         agent = os.path.join('agent', 'dist.js')
@@ -217,10 +158,10 @@ class IPADump(object):
     def run(self):
         self.load_agent()
         if self.output is None:
-            ipa_name = '.'.join([self.app.name, 'ipa'])
+            ipa_name = '.'.join([self.pid, 'ipa'])
         elif os.path.isdir(self.output):
             ipa_name = os.path.join(self.output, '%s.%s' %
-                                    (self.app.name, 'ipa'))
+                                    (self.pid, 'ipa'))
         else:
             ipa_name = self.output
 
@@ -234,16 +175,16 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--device', nargs='?', help='device id (prefix)')
     parser.add_argument('--ip', nargs='?', help='ip to connect over network')
-    parser.add_argument('app', help='application name or bundle id')
     parser.add_argument('-o', '--output', help='output filename')
+    parser.add_argument("-p", "--pid", help="pid")
     parser.add_argument('-v', '--verbose', help='verbose mode', action='store_true')
     parser.add_argument('--keep-watch', action='store_true',
                         default=False, help='preserve WatchOS app')
     args = parser.parse_args()
 
-    dev, app = find_app(args.app, args.device, args.ip)
+    dev = frida.get_usb_device()
 
-    task = IPADump(dev, app,
+    task = IPADump(dev, int(args.pid),
                    keep_watch=args.keep_watch,
                    output=args.output,
                    verbose=args.verbose)
