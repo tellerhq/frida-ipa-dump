@@ -158,7 +158,8 @@ class IPADump(object):
     def run(self):
         self.load_agent()
         if self.output is None:
-            ipa_name = '.'.join([self.pid, 'ipa'])
+            print(str(self.pid))
+            ipa_name = '.'.join([str(self.pid), 'ipa'])
         elif os.path.isdir(self.output):
             ipa_name = os.path.join(self.output, '%s.%s' %
                                     (self.pid, 'ipa'))
